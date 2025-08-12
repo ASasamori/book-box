@@ -34,7 +34,7 @@ const octokit = new Octokit({
 const parser = new Parser({ timeout: 15000 });
 
 async function main() {
-  const wrap = wordwrap(80); // Increased from 58 to prevent unwanted line breaks
+  const wrap = wordwrap(100); // Increased from 58 to prevent unwanted line breaks
 
   try {
     const resp = await got(rssFeedUrl, { retry: { limit: 2 } });
