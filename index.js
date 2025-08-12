@@ -4,6 +4,19 @@ const wordwrap = require("wordwrap");
 const got = require('got');
 const Parser = require('rss-parser');
 
+// Replace bare '&' with '&amp;' while preserving any CDATA blocks
+function escapeBareAmpsPreserveCDATA(xml) {
+  const cdata = [];
+  const protectedXml = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, (m) => {
+    cdata.push(m);
+    return `__CDATA_BLOCK_${cdata.length - 1}__`;
+  });
+
+  const escaped = protectedXml.replace(/&(?![a-zA-Z]+;|#[0-9]+;|#x[0-9a-fA-F]+;)/g, '&amp;');
+
+  return escaped.replace(/__CDATA_BLOCK_(\d+)__/g, (_, i) => cdata[Number(i)]);
+}
+
 const {
   GIST_ID: gistId,
   GH_TOKEN: githubToken,
@@ -25,7 +38,8 @@ async function main() {
 
     let feed;
     try {
-      feed = await parser.parseString(resp.body);
+      const safeBody = escapeBareAmpsPreserveCDATA(resp.body);
+      feed = await parser.parseString(safeBody);
     } catch (e) {
       console.error('RSS parse failed:', e);
       // Fail-soft: still update the gist with a friendly message instead of aborting
@@ -47,7 +61,12 @@ async function main() {
 
     for (const item of items) {
       const title = (item.title || '').trim();
-      const description = (item.contentSnippet || item.content || '').toString();
+      const description = (
+        item.contentSnippet ||
+        item.content ||
+        item.description ||
+        (item['content:encoded'] || '')
+      ).toString();
       console.log(`Checking item: ${title}`);
 
       // Look for "currently reading" patterns in title or description
@@ -86,7 +105,17 @@ async function main() {
     // Update your gist
     await updateGist([wrap(currentlyReading), wrap(recentlyRead)]);
   } catch (error) {
-    console.error(`Unable to fetch RSS feed\n${error}`)
+    console.error(`Unable to fetch RSS feed\n${error}`);
+    // Fail-soft: still update the gist with a friendly message instead of aborting
+    try {
+      const wrap = wordwrap(58);
+      await updateGist([
+        wrap("I'm not reading anything at the moment.\n"),
+        wrap("I haven't read anything recently.")
+      ]);
+    } catch (_) {
+      // ignore secondary failures
+    }
   }
 }
 
@@ -98,6 +127,7 @@ async function updateGist(readingStatus) {
     gist = await octokit.gists.get({ gist_id: gistId });
   } catch (error) {
     console.error(`Unable to get gist\n${error}`);
+    return; // bail if we can't access the gist (bad ID, wrong token, or private gist not owned by token user)
   }
 
   // Get original filename to update that same file
