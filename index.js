@@ -21,16 +21,59 @@ async function main() {
   try {
     const rssFeed = await got(rssFeedUrl);
 
-    // Sanitize XML to handle invalid characters
+    // Sanitize XML to handle invalid characters and malformed tags
     let xmlContent = rssFeed.body;
     // Replace common problematic characters
     xmlContent = xmlContent.replace(/&(?![a-zA-Z0-9#]{1,7};)/g, '&amp;');
+    // Fix common XML issues
+    xmlContent = xmlContent.replace(/<(\w+)>/g, '<$1>').replace(/<\/(\w+)>/g, '</$1>');
+    // Remove any standalone > characters that might cause issues
+    xmlContent = xmlContent.replace(/(?<![<\/\w])\s*>\s*(?![<\w])/g, '&gt;');
     
-    // Convert RSS data from XML to JSON
-    const parsedRssFeed = await parseStringPromise(xmlContent);
+    console.log('Attempting to parse RSS feed...');
+    
+    // Convert RSS data from XML to JSON with more lenient parsing
+    let parsedRssFeed;
+    try {
+      parsedRssFeed = await parseStringPromise(xmlContent, {
+        explicitArray: true,
+        trim: true,
+        normalize: true,
+        ignoreAttrs: true,
+        explicitRoot: false
+      });
+    } catch (xmlError) {
+      console.log('First XML parse failed, trying more aggressive cleaning...');
+      // More aggressive XML cleaning for severely malformed feeds
+      xmlContent = xmlContent
+        .replace(/&(?![a-zA-Z0-9#]{1,7};)/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/&lt;(\/?[a-zA-Z][^&]*?)&gt;/g, '<$1>')
+        .replace(/&lt;!\[CDATA\[(.*?)\]\]&gt;/g, '<![CDATA[$1]]>');
+      
+      parsedRssFeed = await parseStringPromise(xmlContent, {
+        explicitArray: true,
+        trim: true,
+        normalize: true,
+        ignoreAttrs: true,
+        explicitRoot: false
+      });
+    }
 
     // Parse out the information required from RSS feed
-    const items = get(parsedRssFeed, 'rss.channel[0].item', []);
+    // Try different possible RSS structures
+    let items = get(parsedRssFeed, 'rss.channel[0].item', []);
+    if (items.length === 0) {
+      items = get(parsedRssFeed, 'channel[0].item', []);
+    }
+    if (items.length === 0) {
+      items = get(parsedRssFeed, 'feed.entry', []);
+    }
+    if (items.length === 0) {
+      items = get(parsedRssFeed, 'entry', []);
+    }
+    
     console.log(`Found ${items.length} RSS items`);
     
     // Find currently reading and recently read items based on description or title patterns
