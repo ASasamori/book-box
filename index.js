@@ -34,7 +34,7 @@ const octokit = new Octokit({
 const parser = new Parser({ timeout: 15000 });
 
 async function main() {
-  const wrap = wordwrap(58);
+  const wrap = wordwrap(80); // Increased from 58 to prevent unwanted line breaks
 
   try {
     const resp = await got(rssFeedUrl, { retry: { limit: 2 } });
@@ -67,9 +67,12 @@ async function main() {
     // Find currently reading and recently read items based on Goodreads activity patterns
     let currentlyReadingTitle = '';
     let currentlyReadingAuthor = '';
-    let recentlyReadTitle = '';
-    let recentlyReadAuthor = '';
-    let recentlyReadDate = '';
+    let currentlyReadingStartDate = '';
+    let recentlyReadBooks = [];
+
+    // Calculate 6 months ago
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
     for (const item of items) {
       const title = (item.title || '').trim();
@@ -91,7 +94,16 @@ async function main() {
           if (authorMatch) {
             currentlyReadingTitle = bookTitle;
             currentlyReadingAuthor = authorMatch[1].trim();
-            console.log(`Found currently reading: ${currentlyReadingTitle} by ${currentlyReadingAuthor}`);
+            // Extract and format start date
+            if (item.pubDate) {
+              const date = new Date(item.pubDate);
+              currentlyReadingStartDate = date.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: 'numeric' 
+              });
+            }
+            console.log(`Found currently reading: ${currentlyReadingTitle} by ${currentlyReadingAuthor} (started ${currentlyReadingStartDate})`);
           }
         }
       }
@@ -99,23 +111,27 @@ async function main() {
       // Look for "added" patterns which indicate finished reading (when combined with rating)
       if (title.toLowerCase().includes('added \'') && description.toLowerCase().includes('stars')) {
         const match = title.match(/added\s+['"](.+?)['"]$/i);
-        if (match && !recentlyReadTitle) { // Take the first (most recent) finished book
+        if (match) {
           const bookTitle = match[1].trim();
           // Extract author from description
           const authorMatch = description.match(/by\s+([^<]+)/i);
-          if (authorMatch) {
-            recentlyReadTitle = bookTitle;
-            recentlyReadAuthor = authorMatch[1].trim();
-            // Extract and format date
-            if (item.pubDate) {
-              const date = new Date(item.pubDate);
-              recentlyReadDate = date.toLocaleDateString('en-US', { 
+          if (authorMatch && item.pubDate) {
+            const finishDate = new Date(item.pubDate);
+            // Only include books finished within the last 6 months
+            if (finishDate >= sixMonthsAgo) {
+              const formattedDate = finishDate.toLocaleDateString('en-US', { 
                 month: 'short', 
                 day: 'numeric', 
                 year: 'numeric' 
               });
+              recentlyReadBooks.push({
+                title: bookTitle,
+                author: authorMatch[1].trim(),
+                date: formattedDate,
+                pubDate: finishDate
+              });
+              console.log(`Found recently read: ${bookTitle} by ${authorMatch[1].trim()} (${formattedDate})`);
             }
-            console.log(`Found recently read: ${recentlyReadTitle} by ${recentlyReadAuthor} (${recentlyReadDate})`);
           }
         }
       }
@@ -123,12 +139,15 @@ async function main() {
 
     // Create data for currently reading; remove subtitle if it exists
     const currentlyReading = currentlyReadingTitle && currentlyReadingAuthor
-      ? `Currently reading: ${currentlyReadingTitle.split(':')[0]} by ${currentlyReadingAuthor}\n`
+      ? `Currently reading: ${currentlyReadingTitle.split(':')[0]} by ${currentlyReadingAuthor}${currentlyReadingStartDate ? ` (started ${currentlyReadingStartDate})` : ''}\n`
       : `I'm not reading anything at the moment.\n`
 
-    // Create data for recently read; remove subtitle if it exists
-    const recentlyRead = recentlyReadTitle && recentlyReadAuthor
-      ? `Recently read: ${recentlyReadTitle.split(':')[0]} by ${recentlyReadAuthor}${recentlyReadDate ? ` (${recentlyReadDate})` : ''}`
+    // Create data for recently read; remove subtitle if it exists and sort by date (most recent first)
+    recentlyReadBooks.sort((a, b) => b.pubDate - a.pubDate);
+    const recentlyRead = recentlyReadBooks.length > 0
+      ? recentlyReadBooks.map(book => 
+          `Recently read: ${book.title.split(':')[0]} by ${book.author} (${book.date})`
+        ).join('\n')
       : `I haven't read anything recently.`
 
     // Update your gist
