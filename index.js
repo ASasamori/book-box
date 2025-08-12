@@ -8,8 +8,7 @@ const get = require('lodash.get');
 const {
   GIST_ID: gistId,
   GH_TOKEN: githubToken,
-  GOODREADS_KEY: goodreadsKey,
-  GOODREADS_USER_ID: goodreadsUserId,
+  RSS_FEED_URL: rssFeedUrl,
 } = process.env;
 
 const octokit = new Octokit({
@@ -20,25 +19,48 @@ async function main() {
   const wrap = wordwrap(58);
 
   try {
-    const readShelf = await got(`https://www.goodreads.com/review/list/${goodreadsUserId}.xml?key=${goodreadsKey}&v=2&shelf=read&sort=date_read&per_page=1`);
-    const readingShelf = await got(`https://www.goodreads.com/review/list/${goodreadsUserId}.xml?key=${goodreadsKey}&v=2&shelf=currently-reading&sort=date_read&per_page=1`);
+    const rssFeed = await got(rssFeedUrl);
 
-    // Convert Goodreads data from XML to JSON
-    const parsedReadShelf = await parseStringPromise(readShelf.body);
-    const parsedReadingShelf = await parseStringPromise(readingShelf.body);
+    // Convert RSS data from XML to JSON
+    const parsedRssFeed = await parseStringPromise(rssFeed.body);
 
-    // Parse out the information required from Goodreads
-    const recentlyReadBook = get(parsedReadShelf, 'GoodreadsResponse.reviews[0].review[0].book[0]');
-    const recentlyReadTitle = get(recentlyReadBook, 'title_without_series[0]');
-    const recentlyReadAuthor = get(recentlyReadBook, 'authors[0].author[0].name[0]');
+    // Parse out the information required from RSS feed
+    const items = get(parsedRssFeed, 'rss.channel[0].item', []);
+    
+    // Find currently reading and recently read items based on description or title patterns
+    let currentlyReadingTitle = '';
+    let currentlyReadingAuthor = '';
+    let recentlyReadTitle = '';
+    let recentlyReadAuthor = '';
 
-    const currentlyReadingBook = get(parsedReadingShelf, 'GoodreadsResponse.reviews[0].review[0].book[0]');
-    const currentlyReadingTitle = get(currentlyReadingBook, 'title_without_series[0]');
-    const currentlyReadingAuthor = get(currentlyReadingBook, 'authors[0].author[0].name[0]');
+    for (const item of items) {
+      const title = get(item, 'title[0]', '');
+      const description = get(item, 'description[0]', '');
+      
+      // Look for "currently reading" patterns in title or description
+      if (title.toLowerCase().includes('currently reading') || description.toLowerCase().includes('currently reading')) {
+        const match = title.match(/(?:currently reading[:\s]+)?(.+?)\s+by\s+(.+?)(?:\s|$)/i);
+        if (match) {
+          currentlyReadingTitle = match[1].trim();
+          currentlyReadingAuthor = match[2].trim();
+        }
+      }
+      
+      // Look for "finished" or "read" patterns for recently read
+      if ((title.toLowerCase().includes('finished') || title.toLowerCase().includes('read')) && 
+          !title.toLowerCase().includes('currently reading')) {
+        const match = title.match(/(?:finished|read)[:\s]+(.+?)\s+by\s+(.+?)(?:\s|$)/i);
+        if (match) {
+          recentlyReadTitle = match[1].trim();
+          recentlyReadAuthor = match[2].trim();
+          break; // Take the first (most recent) finished book
+        }
+      }
+    }
 
     // Create data for currently reading; remove subtitle if it exists
     const currentlyReading = currentlyReadingTitle && currentlyReadingAuthor
-      ? `Currently reading: ${currentlyReadingTitle.split(':'[0])} by ${currentlyReadingAuthor}\n`
+      ? `Currently reading: ${currentlyReadingTitle.split(':')[0]} by ${currentlyReadingAuthor}\n`
       : `I'm not reading anything at the moment.\n`
 
     // Create data for recently read; remove subtitle if it exists
@@ -49,7 +71,7 @@ async function main() {
     // Update your gist
     await updateGist([wrap(currentlyReading), wrap(recentlyRead)]);
   } catch (error) {
-    console.error(`Unable to fetch Goodreads books\n${error}`)
+    console.error(`Unable to fetch RSS feed\n${error}`)
   }
 }
 
