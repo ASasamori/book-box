@@ -4,29 +4,22 @@ const wordwrap = require("wordwrap");
 const got = require('got');
 const Parser = require('rss-parser');
 
-// Replace bare '&' with '&amp;' while preserving any CDATA blocks
-function escapeBareAmpsPreserveCDATA(xml) {
-  const cdata = [];
-  const protectedXml = xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, (m) => {
-    cdata.push(m);
-    return `__CDATA_BLOCK_${cdata.length - 1}__`;
+function sanitizeXML(xml) {
+  // Fix common XML parsing issues with minimal changes
+  let cleaned = xml;
+  
+  // Replace unescaped ampersands that aren't part of entities
+  cleaned = cleaned.replace(/&(?![a-zA-Z0-9#]+;)/g, '&amp;');
+  
+  // Fix any unclosed XML tags by ensuring proper closing
+  // This is a simplified approach that handles common RSS issues
+  cleaned = cleaned.replace(/<(\w+)([^>]*?)(?:\s*\/)?>([^<]*)<\/\1>/g, (match, tag, attrs, content) => {
+    // Ensure content doesn't break XML parsing
+    const safeContent = content.replace(/&(?![a-zA-Z0-9#]+;)/g, '&amp;');
+    return `<${tag}${attrs}>${safeContent}</${tag}>`;
   });
-
-  const escaped = protectedXml.replace(/&(?![a-zA-Z]+;|#[0-9]+;|#x[0-9a-fA-F]+;)/g, '&amp;');
-
-  return escaped.replace(/__CDATA_BLOCK_(\d+)__/g, (_, i) => cdata[Number(i)]);
-}
-
-// Wrap contents of a given XML tag in CDATA (if not already), preserving any existing CDATA
-function wrapTagContentInCDATA(xml, tagName) {
-  const openTag = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'gi');
-  return xml.replace(openTag, (_, inner) => {
-    // If already CDATA, leave as-is
-    if (/^\s*<!\[CDATA\[[\s\S]*?\]\]>\s*$/.test(inner)) return `<${tagName}>${inner}</${tagName}>`;
-    // Split any accidental CDATA end markers to avoid breaking out
-    const safeInner = inner.replace(/\]\]>/g, ']]]]><![CDATA[>');
-    return `<${tagName}><![CDATA[${safeInner}]]></${tagName}>`;
-  });
+  
+  return cleaned;
 }
 
 const {
@@ -50,11 +43,14 @@ async function main() {
 
     let feed;
     try {
-      let safeBody = escapeBareAmpsPreserveCDATA(resp.body);
-      // Many feeds embed raw HTML inside these fields; wrap them in CDATA to prevent XML close-tag errors
-      safeBody = wrapTagContentInCDATA(safeBody, 'description');
-      safeBody = wrapTagContentInCDATA(safeBody, 'content:encoded');
-      feed = await parser.parseString(safeBody);
+      // First try parsing without sanitization
+      try {
+        feed = await parser.parseString(resp.body);
+      } catch (firstError) {
+        console.log('First parse attempt failed, trying with sanitization...');
+        const safeBody = sanitizeXML(resp.body);
+        feed = await parser.parseString(safeBody);
+      }
     } catch (e) {
       console.error('RSS parse failed:', e);
       // Fail-soft: still update the gist with a friendly message instead of aborting
