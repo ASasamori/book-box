@@ -139,16 +139,16 @@ async function main() {
 
     // Create data for currently reading; remove subtitle if it exists
     const currentlyReading = currentlyReadingTitle && currentlyReadingAuthor
-      ? `Currently reading: ${currentlyReadingTitle.split(':')[0]} by ${currentlyReadingAuthor}${currentlyReadingStartDate ? ` (started ${currentlyReadingStartDate})` : ''}\n`
-      : `I'm not reading anything at the moment.\n`
+      ? `Currently reading:\n${currentlyReadingTitle.split(':')[0]} by ${currentlyReadingAuthor}${currentlyReadingStartDate ? ` (started ${currentlyReadingStartDate})` : ''}\n`
+      : `Currently reading:\nI'm not reading anything at the moment.\n`
 
     // Create data for recently read; remove subtitle if it exists and sort by date (most recent first)
     recentlyReadBooks.sort((a, b) => b.pubDate - a.pubDate);
     const recentlyRead = recentlyReadBooks.length > 0
-      ? recentlyReadBooks.map(book => 
-          `Recently read: ${book.title.split(':')[0]} by ${book.author} (${book.date})`
-        ).join('\n')
-      : `I haven't read anything recently.`
+      ? `Recently read:\n${recentlyReadBooks.map(book => 
+          `${book.title.split(':')[0]} by ${book.author} (${book.date})`
+        ).join('\n')}`
+      : `Recently read:\nI haven't read anything recently.`
 
     // Update your gist
     await updateGist([wrap(currentlyReading), wrap(recentlyRead)]);
