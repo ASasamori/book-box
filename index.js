@@ -17,6 +17,18 @@ function escapeBareAmpsPreserveCDATA(xml) {
   return escaped.replace(/__CDATA_BLOCK_(\d+)__/g, (_, i) => cdata[Number(i)]);
 }
 
+// Wrap contents of a given XML tag in CDATA (if not already), preserving any existing CDATA
+function wrapTagContentInCDATA(xml, tagName) {
+  const openTag = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'gi');
+  return xml.replace(openTag, (_, inner) => {
+    // If already CDATA, leave as-is
+    if (/^\s*<!\[CDATA\[[\s\S]*?\]\]>\s*$/.test(inner)) return `<${tagName}>${inner}</${tagName}>`;
+    // Split any accidental CDATA end markers to avoid breaking out
+    const safeInner = inner.replace(/\]\]>/g, ']]]]><![CDATA[>');
+    return `<${tagName}><![CDATA[${safeInner}]]></${tagName}>`;
+  });
+}
+
 const {
   GIST_ID: gistId,
   GH_TOKEN: githubToken,
@@ -38,7 +50,10 @@ async function main() {
 
     let feed;
     try {
-      const safeBody = escapeBareAmpsPreserveCDATA(resp.body);
+      let safeBody = escapeBareAmpsPreserveCDATA(resp.body);
+      // Many feeds embed raw HTML inside these fields; wrap them in CDATA to prevent XML close-tag errors
+      safeBody = wrapTagContentInCDATA(safeBody, 'description');
+      safeBody = wrapTagContentInCDATA(safeBody, 'content:encoded');
       feed = await parser.parseString(safeBody);
     } catch (e) {
       console.error('RSS parse failed:', e);
@@ -120,7 +135,11 @@ async function main() {
 }
 
 async function updateGist(readingStatus) {
-  
+
+  if (!gistId || !githubToken) {
+    console.error('Missing GIST_ID or GH_TOKEN in environment.');
+    return;
+  }
 
   let gist;
   try {
