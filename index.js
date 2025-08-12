@@ -2,8 +2,7 @@ require("dotenv").config();
 const { Octokit } = require("@octokit/rest");
 const wordwrap = require("wordwrap");
 const got = require('got');
-const { parseStringPromise } = require('xml2js');
-const get = require('lodash.get');
+const Parser = require('rss-parser');
 
 const {
   GIST_ID: gistId,
@@ -14,68 +13,32 @@ const {
 const octokit = new Octokit({
   auth: `token ${githubToken}`
 });
+const parser = new Parser({ timeout: 15000 });
 
 async function main() {
   const wrap = wordwrap(58);
 
   try {
-    const rssFeed = await got(rssFeedUrl);
+    const resp = await got(rssFeedUrl, { retry: { limit: 2 } });
 
-    // Sanitize XML to handle invalid characters and malformed tags
-    let xmlContent = rssFeed.body;
-    // Replace common problematic characters
-    xmlContent = xmlContent.replace(/&(?![a-zA-Z0-9#]{1,7};)/g, '&amp;');
-    // Fix common XML issues
-    xmlContent = xmlContent.replace(/<(\w+)>/g, '<$1>').replace(/<\/(\w+)>/g, '</$1>');
-    // Remove any standalone > characters that might cause issues
-    xmlContent = xmlContent.replace(/(?<![<\/\w])\s*>\s*(?![<\w])/g, '&gt;');
-    
     console.log('Attempting to parse RSS feed...');
-    
-    // Convert RSS data from XML to JSON with more lenient parsing
-    let parsedRssFeed;
+
+    let feed;
     try {
-      parsedRssFeed = await parseStringPromise(xmlContent, {
-        explicitArray: true,
-        trim: true,
-        normalize: true,
-        ignoreAttrs: true,
-        explicitRoot: false
-      });
-    } catch (xmlError) {
-      console.log('First XML parse failed, trying more aggressive cleaning...');
-      // More aggressive XML cleaning for severely malformed feeds
-      xmlContent = xmlContent
-        .replace(/&(?![a-zA-Z0-9#]{1,7};)/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/&lt;(\/?[a-zA-Z][^&]*?)&gt;/g, '<$1>')
-        .replace(/&lt;!\[CDATA\[(.*?)\]\]&gt;/g, '<![CDATA[$1]]>');
-      
-      parsedRssFeed = await parseStringPromise(xmlContent, {
-        explicitArray: true,
-        trim: true,
-        normalize: true,
-        ignoreAttrs: true,
-        explicitRoot: false
-      });
+      feed = await parser.parseString(resp.body);
+    } catch (e) {
+      console.error('RSS parse failed:', e);
+      // Fail-soft: still update the gist with a friendly message instead of aborting
+      await updateGist([
+        wrap("I'm not reading anything at the moment.\n"),
+        wrap("I haven't read anything recently.")
+      ]);
+      return;
     }
 
-    // Parse out the information required from RSS feed
-    // Try different possible RSS structures
-    let items = get(parsedRssFeed, 'rss.channel[0].item', []);
-    if (items.length === 0) {
-      items = get(parsedRssFeed, 'channel[0].item', []);
-    }
-    if (items.length === 0) {
-      items = get(parsedRssFeed, 'feed.entry', []);
-    }
-    if (items.length === 0) {
-      items = get(parsedRssFeed, 'entry', []);
-    }
-    
+    const items = feed.items || [];
     console.log(`Found ${items.length} RSS items`);
-    
+
     // Find currently reading and recently read items based on description or title patterns
     let currentlyReadingTitle = '';
     let currentlyReadingAuthor = '';
@@ -83,10 +46,10 @@ async function main() {
     let recentlyReadAuthor = '';
 
     for (const item of items) {
-      const title = get(item, 'title[0]', '');
-      const description = get(item, 'description[0]', '');
+      const title = (item.title || '').trim();
+      const description = (item.contentSnippet || item.content || '').toString();
       console.log(`Checking item: ${title}`);
-      
+
       // Look for "currently reading" patterns in title or description
       if (title.toLowerCase().includes('currently reading') || description.toLowerCase().includes('currently reading')) {
         const match = title.match(/(?:currently reading[:\s]+)?(.+?)\s+by\s+(.+?)(?:\s|$)/i);
@@ -96,9 +59,9 @@ async function main() {
           console.log(`Found currently reading: ${currentlyReadingTitle} by ${currentlyReadingAuthor}`);
         }
       }
-      
+
       // Look for "finished" or "read" patterns for recently read
-      if ((title.toLowerCase().includes('finished') || title.toLowerCase().includes('read')) && 
+      if ((title.toLowerCase().includes('finished') || title.toLowerCase().includes('read')) &&
           !title.toLowerCase().includes('currently reading')) {
         const match = title.match(/(?:finished|read)[:\s]+(.+?)\s+by\s+(.+?)(?:\s|$)/i);
         if (match) {
