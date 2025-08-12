@@ -64,11 +64,12 @@ async function main() {
     const items = feed.items || [];
     console.log(`Found ${items.length} RSS items`);
 
-    // Find currently reading and recently read items based on description or title patterns
+    // Find currently reading and recently read items based on Goodreads activity patterns
     let currentlyReadingTitle = '';
     let currentlyReadingAuthor = '';
     let recentlyReadTitle = '';
     let recentlyReadAuthor = '';
+    let recentlyReadDate = '';
 
     for (const item of items) {
       const title = (item.title || '').trim();
@@ -80,25 +81,42 @@ async function main() {
       ).toString();
       console.log(`Checking item: ${title}`);
 
-      // Look for "currently reading" patterns in title or description
-      if (title.toLowerCase().includes('currently reading') || description.toLowerCase().includes('currently reading')) {
-        const match = title.match(/(?:currently reading[:\s]+)?(.+?)\s+by\s+(.+?)(?:\s|$)/i);
+      // Look for "currently reading" patterns - Goodreads uses "is currently reading"
+      if (title.toLowerCase().includes('is currently reading')) {
+        const match = title.match(/is currently reading\s+['"](.+?)['"]$/i);
         if (match) {
-          currentlyReadingTitle = match[1].trim();
-          currentlyReadingAuthor = match[2].trim();
-          console.log(`Found currently reading: ${currentlyReadingTitle} by ${currentlyReadingAuthor}`);
+          const bookTitle = match[1].trim();
+          // Extract author from description
+          const authorMatch = description.match(/by\s+([^<]+)/i);
+          if (authorMatch) {
+            currentlyReadingTitle = bookTitle;
+            currentlyReadingAuthor = authorMatch[1].trim();
+            console.log(`Found currently reading: ${currentlyReadingTitle} by ${currentlyReadingAuthor}`);
+          }
         }
       }
 
-      // Look for "finished" or "read" patterns for recently read
-      if ((title.toLowerCase().includes('finished') || title.toLowerCase().includes('read')) &&
-          !title.toLowerCase().includes('currently reading')) {
-        const match = title.match(/(?:finished|read)[:\s]+(.+?)\s+by\s+(.+?)(?:\s|$)/i);
-        if (match) {
-          recentlyReadTitle = match[1].trim();
-          recentlyReadAuthor = match[2].trim();
-          console.log(`Found recently read: ${recentlyReadTitle} by ${recentlyReadAuthor}`);
-          break; // Take the first (most recent) finished book
+      // Look for "added" patterns which indicate finished reading (when combined with rating)
+      if (title.toLowerCase().includes('added \'') && description.toLowerCase().includes('stars')) {
+        const match = title.match(/added\s+['"](.+?)['"]$/i);
+        if (match && !recentlyReadTitle) { // Take the first (most recent) finished book
+          const bookTitle = match[1].trim();
+          // Extract author from description
+          const authorMatch = description.match(/by\s+([^<]+)/i);
+          if (authorMatch) {
+            recentlyReadTitle = bookTitle;
+            recentlyReadAuthor = authorMatch[1].trim();
+            // Extract and format date
+            if (item.pubDate) {
+              const date = new Date(item.pubDate);
+              recentlyReadDate = date.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: 'numeric' 
+              });
+            }
+            console.log(`Found recently read: ${recentlyReadTitle} by ${recentlyReadAuthor} (${recentlyReadDate})`);
+          }
         }
       }
     }
@@ -110,7 +128,7 @@ async function main() {
 
     // Create data for recently read; remove subtitle if it exists
     const recentlyRead = recentlyReadTitle && recentlyReadAuthor
-      ? `Recently read: ${recentlyReadTitle.split(':')[0]} by ${recentlyReadAuthor}`
+      ? `Recently read: ${recentlyReadTitle.split(':')[0]} by ${recentlyReadAuthor}${recentlyReadDate ? ` (${recentlyReadDate})` : ''}`
       : `I haven't read anything recently.`
 
     // Update your gist
